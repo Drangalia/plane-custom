@@ -37,20 +37,34 @@ jobs:
       # One failure should not cancel the other four: knowing that four of five
       # build and the fifth does not is the useful result.
       fail-fast: false
+      # The build CONTEXT differs by image and is not cosmetic. The four
+      # JavaScript services are part of the yarn monorepo and need the repository
+      # root, because their Dockerfiles copy shared workspace manifests. The API
+      # and the proxy are self-contained directories: Dockerfile.api copies
+      # `/manage.py`, `/plane`, `/bin`; Dockerfile.ce copies `/Caddyfile.ce`.
+      # Build those two from the root and they fail on a missing file that is
+      # sitting right next to the Dockerfile — which is exactly how the first
+      # run failed.
       matrix:
         include:
           - image: plane-frontend
             file: apps/web/Dockerfile.web
+            context: .
           - image: plane-space
             file: apps/space/Dockerfile.space
+            context: .
           - image: plane-admin
             file: apps/admin/Dockerfile.admin
+            context: .
           - image: plane-live
             file: apps/live/Dockerfile.live
+            context: .
           - image: plane-backend
             file: apps/api/Dockerfile.api
+            context: apps/api
           - image: plane-proxy
             file: apps/proxy/Dockerfile.ce
+            context: apps/proxy
 
     steps:
       - uses: actions/checkout@v4
@@ -75,7 +89,7 @@ jobs:
       - name: Build and push ${{ matrix.image }}
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ matrix.context }}
           file: ${{ matrix.file }}
           push: true
           tags: ghcr.io/${{ steps.meta.outputs.owner }}/${{ matrix.image }}:${{ steps.meta.outputs.sha }}
