@@ -1,0 +1,96 @@
+name: Build the tracker images
+
+# Builds this fork into ghcr.io/drangalia/plane-* so the company box can run its
+# OWN Plane rather than published upstream tags.
+#
+# Plane is six images, not one, and the box runs all of them: the API image is
+# also the worker and the beat-worker, so five Dockerfiles cover the lot.
+#
+# Deliberately manual, and every image carries the SAME commit SHA as its tag.
+# That matters more here than for a single-image app: Plane's services talk to
+# each other and share a database schema, so a box running web from one commit
+# and api from another is a migration bug waiting to be misdiagnosed. Build them
+# together, deploy them together.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or SHA to build"
+        required: false
+        default: "preview"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-tracker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    strategy:
+      # One failure should not cancel the other four: knowing that four of five
+      # build and the fifth does not is the useful result.
+      fail-fast: false
+      matrix:
+        include:
+          - image: plane-frontend
+            file: apps/web/Dockerfile.web
+          - image: plane-space
+            file: apps/space/Dockerfile.space
+          - image: plane-admin
+            file: apps/admin/Dockerfile.admin
+          - image: plane-live
+            file: apps/live/Dockerfile.live
+          - image: plane-backend
+            file: apps/api/Dockerfile.api
+          - image: plane-proxy
+            file: apps/proxy/Dockerfile.ce
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Record what is actually being built
+        id: meta
+        run: echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.meta.outputs.sha }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          provenance: false
+
+  summary:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "### Tracker images" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Build result: **${{ needs.build.result }}**." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "All six images share one commit SHA as their tag. Deploy them" >> "$GITHUB_STEP_SUMMARY"
+          echo "together: Plane's services share a database schema, and a box" >> "$GITHUB_STEP_SUMMARY"
+          echo "running web from one commit and api from another is a migration" >> "$GITHUB_STEP_SUMMARY"
+          echo "bug that will be blamed on something else." >> "$GITHUB_STEP_SUMMARY"
